@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1d3557">
+  <title>Pendientes</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main>
+    <h1>Pendientes </h1>
+    <p id="stats" aria-live="polite"></p>
+    <form id="form">
+      <label for="title">Nueva tarea</label>
+      <div class="row">
+        <input id="title" autocomplete="off" placeholder="Ej. Revisar el pipeline">
+        <button type="submit">Agregar tarea</button>
+      </div>
+      <p id="error" role="alert"></p>
+    </form>
+    <ul id="list"></ul>
+  </main>
+  <footer><small id="version">v—</small></footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
