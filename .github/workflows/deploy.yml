@@ -1,0 +1,124 @@
+name: CI/CD - Build, Test y Deploy
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # publicar en gh-pages y crear releases
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 1) INTEGRACIÓN CONTINUA: pruebas en varios sistemas operativos y versiones de Node
+  ci:
+    name: CI (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Pruebas unitarias y funcionales
+        run: npm test
+
+  # 2) CONSTRUCCIÓN: genera el artefacto versionado
+  build:
+    name: Build y artefacto
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Construir
+        run: npm run build
+        env:
+          DEPLOY_ENV: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      - name: Empaquetar artefacto
+        run: cd dist && zip -r ../devops-web-${{ github.run_number }}.zip .
+      - name: Subir artefacto de build
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.run_number }}
+          path: |
+            dist
+            devops-web-${{ github.run_number }}.zip
+
+  # 3) ENTREGA CONTINUA: despliegue automático al ambiente de pruebas (rama develop)
+  deploy-staging:
+    name: Deploy a STAGING
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/staging/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ github.run_number }}
+          path: artifact
+      - name: Publicar en /staging
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./artifact/dist
+          destination_dir: staging
+          keep_files: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Verificación post-despliegue (smoke test)
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          node scripts/smoke.js "https://${OWNER}.github.io/${{ github.event.repository.name }}/staging/" "${{ github.sha }}"
+
+  # 4) LIBERACIÓN A PRODUCCIÓN (rama main): requiere aprobación manual del ambiente "production"
+  deploy-production:
+    name: Deploy a PRODUCCIÓN
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: production   # configurar "Required reviewers" en Settings > Environments
+      url: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ github.run_number }}
+          path: artifact
+      - name: Publicar en la raíz del sitio
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./artifact/dist
+          keep_files: true   # conserva /staging
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Smoke test de producción
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          node scripts/smoke.js "https://${OWNER}.github.io/${{ github.event.repository.name }}/" "${{ github.sha }}"
+      - name: Crear release con el artefacto validado
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "v1.0.${{ github.run_number }}" artifact/devops-web-${{ github.run_number }}.zip --title "Release v1.0.${{ github.run_number }}" --generate-notes
